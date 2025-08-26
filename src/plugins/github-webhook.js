@@ -5,6 +5,42 @@ async function githubWebhookPlugin(fastify, options) {
     console.log('GITHUB_WEBHOOK_SECRET not set. Webhook signature validation will be skipped.');
   }
 
+  // Function to fetch PR file changes from GitHub API
+  const fetchPRFileChanges = async (prUrl) => {
+    try {
+      // Convert PR URL to API URL for files
+      // From: https://github.com/owner/repo/pull/123
+      // To: https://api.github.com/repos/owner/repo/pulls/123/files
+      const apiUrl = prUrl
+        .replace('github.com', 'api.github.com/repos')
+        .replace('/pull/', '/pulls/') + '/files';
+
+      console.log('Fetching file changes from:', apiUrl);
+      
+      const response = await fetch(apiUrl);
+      if (!response.ok) {
+        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+      }
+      
+      const files = await response.json();
+      console.log(`Found ${files.length} changed files`);
+      
+      return files.map(file => ({
+        filename: file.filename,
+        status: file.status, // added, modified, deleted, renamed
+        additions: file.additions,
+        deletions: file.deletions,
+        changes: file.changes,
+        patch: file.patch, // The actual diff
+        blob_url: file.blob_url,
+        raw_url: file.raw_url
+      }));
+    } catch (error) {
+      console.error('Error fetching PR file changes:', error.message);
+      return [];
+    }
+  };
+
   // GitHub webhook endpoint
   fastify.post('/', async (request, reply) => {
     const { body } = request;
@@ -12,7 +48,6 @@ async function githubWebhookPlugin(fastify, options) {
     
     console.log('GitHub webhook received!');
     console.log('Event type:', eventType);
-    // console.log('Body:', JSON.stringify(body, null, 2));
     
     // Handle PR creation event
     if (eventType === 'pull_request' && body.action === 'opened') {
@@ -20,10 +55,30 @@ async function githubWebhookPlugin(fastify, options) {
       const repo = body.repository;
       const sender = body.sender;
       
+      // console.log('=== PULL REQUEST CREATED ===');
+      // console.log('PR Number:', pr.number);
+      // console.log('PR Title:', pr.title);
+      // console.log('PR URL:', pr.html_url);
+      // console.log('Repository:', repo.full_name);
+      // console.log('Author:', sender.login);
+      
+      // Fetch file changes
+      console.log('Fetching file changes...');
+      const fileChanges = await fetchPRFileChanges(pr.html_url);
+      
+      console.log('=== FILE CHANGES ===');
+      fileChanges.forEach((file, index) => {
+        console.log(`${index + 1}. ${file.filename}`);
+        console.log(`   Status: ${file.status}`);
+        console.log(`   Changes: +${file.additions} -${file.deletions}`);
+        console.log(`   Raw URL: ${file.raw_url}`);
+        console.log('---');
+      });
+      console.log('=== END FILE CHANGES ===');
+      
       return {
         success: true,
-        message: 'Pull request details captured',
-        action: body.action,
+        message: 'Pull request details captured with file changes',
         pr: {
           number: pr.number,
           title: pr.title,
@@ -33,16 +88,14 @@ async function githubWebhookPlugin(fastify, options) {
           createdAt: pr.created_at,
           baseBranch: pr.base.ref,
           headBranch: pr.head.ref,
-          isDraft: pr.draft || false,
-          labels: pr.labels?.map(l => l.name) || [],
-          assignees: pr.assignees?.map(a => a.login) || []
+          fileChanges: fileChanges
         }
       };
     }
 
     // Handle other PR events
     if (eventType === 'pull_request') {
-      console.log('📝 Pull Request Event:', {
+      console.log('Pull Request Event:', {
         action: body.action,
         prNumber: body.pull_request?.number,
         repository: body.repository?.full_name
