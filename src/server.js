@@ -31,6 +31,9 @@ server.post("/api/analyze-files", async (request, reply) => {
   // Simulate API processing time
   await new Promise((resolve) => setTimeout(resolve, 500));
 
+  // Example: You can return empty array to test the "no files" scenario
+  // const filesToCreate = []; // Uncomment this line to test no files scenario
+  
   // Fixed file paths and content as requested
   const filesToCreate = [
     {

@@ -153,9 +153,11 @@ async function githubWebhookPlugin(fastify, options) {
         analysis: analysisResult
           ? {
               success: true,
-              newPR: analysisResult.newPR,
-              createdFiles: analysisResult.createdFiles,
-              directories: analysisResult.directories,
+              skipped: analysisResult.skipped || false,
+              reason: analysisResult.reason || null,
+              newPR: analysisResult.newPR || null,
+              createdFiles: analysisResult.createdFiles || [],
+              analysisId: analysisResult.analysisId,
             }
           : null,
       };

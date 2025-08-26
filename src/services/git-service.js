@@ -225,10 +225,6 @@ This PR was automatically generated in response to PR #${prData.number}.
     try {
       console.log("=== Starting Remote PR Analysis Workflow ===");
 
-      // Generate unique branch name with clear auto-generated marker
-      const timestamp = Date.now();
-      const newBranchName = `auto-analysis-pr-${prData.number}-${timestamp}`;
-
       // Safety check: Ensure we don't process our own PRs
       if (prData.headBranch.startsWith("auto-analysis-pr-")) {
         throw new Error(
@@ -236,17 +232,41 @@ This PR was automatically generated in response to PR #${prData.number}.
         );
       }
 
-      // Create remote branch (based on the PR's head branch)
+      // Step 1: Call analysis API first to get file paths and content
+      console.log("Step 1: Calling analysis API...");
+      const apiResponse = await this.callAnalysisAPI(fileChanges);
+
+      // Step 2: Check if API returned any files to create
+      if (!apiResponse.filesToCreate || apiResponse.filesToCreate.length === 0) {
+        console.log("No files to create from API response - skipping branch/PR creation");
+        return {
+          success: true,
+          skipped: true,
+          reason: "No files to create",
+          analysisId: apiResponse.analysisId,
+          apiResponse: {
+            timestamp: apiResponse.timestamp,
+            filesCount: 0
+          }
+        };
+      }
+
+      console.log(`API returned ${apiResponse.filesToCreate.length} files to create`);
+
+      // Step 3: Generate unique branch name with clear auto-generated marker
+      const timestamp = Date.now();
+      const newBranchName = `auto-analysis-pr-${prData.number}-${timestamp}`;
+
+      // Step 4: Create remote branch (based on the PR's head branch)
+      console.log("Step 2: Creating remote branch...");
       const { owner, repo } = await this.createRemoteBranch(
         prData.url,
         prData.headBranch, // Use the PR's head branch as base
         newBranchName
       );
 
-      // Call analysis API to get file paths and content
-      const apiResponse = await this.callAnalysisAPI(fileChanges);
-
-      // Create files remotely using API response
+      // Step 5: Create files remotely using API response
+      console.log("Step 3: Creating files...");
       const createdFiles = await this.createFilesFromAPIResponse(
         owner,
         repo,
@@ -255,7 +275,8 @@ This PR was automatically generated in response to PR #${prData.number}.
         prData
       );
 
-      // Create draft PR (on top of the original PR)
+      // Step 6: Create draft PR (on top of the original PR)
+      console.log("Step 4: Creating draft PR...");
       const newPR = await this.createPullRequest(
         owner,
         repo,

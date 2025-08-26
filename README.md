@@ -153,22 +153,24 @@ When a PR is created, you'll see:
 When a PR is created, the system will **automatically**:
 
 ### 1. **Analyze File Changes**
-- Detect all directories where files were changed
-- Extract file metadata (additions, deletions, status)
+- Extract file metadata (additions, deletions, status) from the PR
+- Pass changed files data to analysis API
 
-### 2. **Call Analysis API & Create Files**
-- Calls internal dummy API (`/api/analyze-files`) with only changed files data
-- API returns fixed file paths: `python_oops/default.md` and `python_oops/default2.md`
-- Content is hardcoded: "This is default1 content" and "This is default2 content"
-- No directory logic - files are created at specified paths
+### 2. **Call Analysis API First**
+- Calls internal API (`/api/analyze-files`) with changed files data
+- API returns file paths, content, and `fileExists` flags
+- **Early exit**: If no files returned, skips branch/PR creation entirely
 
-### 3. **Create Remote Branch & Draft PR**
+### 3. **Create Remote Branch & Files (Only if files exist)**
 - Creates a remote branch: `auto-analysis-pr-{PR_NUMBER}-{TIMESTAMP}`
 - Based on the original PR's head branch (stacked on top)
+- **Smart file handling**: Creates new files or updates existing ones based on `fileExists` flag
 - Uses GitHub API - no local cloning required
-- Creates files directly via GitHub API
+
+### 4. **Create Draft PR**
 - Automatically creates a **draft PR** with the analysis files
 - Links back to the original PR for context
+- Only created if files were successfully created
 
 ### Example Workflow
 ```
@@ -177,11 +179,23 @@ Original PR: feature/user-auth → main
 Auto PR: auto-analysis-pr-123-1234567890 → feature/user-auth
 ```
 
-The analysis PR will always contain these two files:
+### Workflow Execution Order:
+```
+1. PR Created → Webhook Triggered
+2. Call Analysis API with changed files
+3. Check API Response:
+   ├─ No files? → Skip everything, return success
+   └─ Has files? → Continue to step 4
+4. Create remote branch
+5. Create/update files based on fileExists flags  
+6. Create draft PR
+```
+
+The analysis PR will contain these files (if API returns them):
 ```
 python_oops/
-├── default.md       # "This is default1 content"
-└── default2.md      # "This is default2 content"
+├── default.md       # "This is default content"
+└── README.md        # "This is new readme content"
 ```
 
 ## 🛡️ Loop Prevention
