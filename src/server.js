@@ -35,13 +35,15 @@ server.post("/api/analyze-files", async (request, reply) => {
   const filesToCreate = [
     {
       path: "python_oops/default.md",
-      content: "This is default1 content",
-      type: "default1",
+      content: "This is default content",
+      type: "default",
+      fileExists: false, 
     },
     {
-      path: "python_oops/default2.md", 
-      content: "This is default2 content",
-      type: "default2",
+      path: "python_oops/README.md", 
+      content: "This is new readme content",
+      type: "README",
+      fileExists: true, 
     }
   ];
 

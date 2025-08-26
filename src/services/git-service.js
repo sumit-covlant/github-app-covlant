@@ -60,6 +60,7 @@ class GitService {
    */
   async createRemoteBranch(repoUrl, baseBranch, newBranchName) {
     const { owner, repo } = this.parseGitHubUrl(repoUrl);
+    console.log(`Owner: ${owner}, Repo: ${repo}`);
 
     console.log(
       `Creating remote branch: ${newBranchName} based on ${baseBranch}`
@@ -93,6 +94,26 @@ class GitService {
   }
 
   /**
+   * Get file SHA if it exists (for updates)
+   */
+  async getFileSHA(owner, repo, path, branch) {
+    try {
+      const response = await this.octokit.repos.getContent({
+        owner,
+        repo,
+        path,
+        ref: branch
+      });
+      return response.data.sha;
+    } catch (error) {
+      if (error.status === 404) {
+        return null; 
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Create files remotely via GitHub API using API response
    */
   async createFilesFromAPIResponse(
@@ -104,30 +125,51 @@ class GitService {
   ) {
     const createdFiles = [];
 
-    console.log(`📝 Creating ${apiResponse.filesToCreate.length} files from API response...`);
+    console.log(`Processing ${apiResponse.filesToCreate.length} files from API response...`);
 
     for (const fileData of apiResponse.filesToCreate) {
       try {
-        // Create file using GitHub API
-        await this.octokit.repos.createOrUpdateFileContents({
+        const requestData = {
           owner,
           repo,
           path: fileData.path,
-          message: `Add ${fileData.type} file for PR #${prData.number} analysis`,
           content: Buffer.from(fileData.content).toString("base64"),
           branch: branchName,
-        });
+        };
+
+        // Handle file existence based on API response
+        if (fileData.fileExists) {
+          // File exists - need SHA for update
+          const sha = await this.getFileSHA(owner, repo, fileData.path, branchName);
+          if (sha) {
+            requestData.sha = sha;
+            requestData.message = `Update ${fileData.type} file for PR #${prData.number} analysis`;
+            console.log(`File ${fileData.path} exists - updating...`);
+          } else {
+            // API says file exists but we couldn't get SHA - treat as create
+            requestData.message = `Add ${fileData.type} file for PR #${prData.number} analysis`;
+            console.log(`File ${fileData.path} marked as existing but not found - creating...`);
+          }
+        } else {
+          // File doesn't exist - create new
+          requestData.message = `Add ${fileData.type} file for PR #${prData.number} analysis`;
+          console.log(`File ${fileData.path} doesn't exist - creating...`);
+        }
+
+        // Create or update file using GitHub API
+        await this.octokit.repos.createOrUpdateFileContents(requestData);
 
         createdFiles.push(fileData.path);
 
-        console.log(`Created file: ${fileData.path}`);
+        const action = fileData.fileExists ? 'Updated' : 'Created';
+        console.log(`${action} file: ${fileData.path}`);
       } catch (error) {
-        console.error(`Error creating file ${fileData.path}:`, error.message);
+        console.error(`Error processing file ${fileData.path}:`, error.message);
         throw error;
       }
     }
 
-    console.log(`🎉 Successfully created ${createdFiles.length} files remotely`);
+    console.log(`🎉 Successfully processed ${createdFiles.length} files remotely`);
     return createdFiles;
   }
 

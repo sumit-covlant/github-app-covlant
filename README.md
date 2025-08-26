@@ -107,20 +107,26 @@ Internal API that processes file changes and returns file paths/content for PR a
 {
   "success": true,
   "analysisId": "analysis-1234567890",
-  "filesToCreate": [
+  "filesToCreate": filesToCreate = [
     {
       "path": "python_oops/default.md",
-      "content": "This is default1 content",
-      "type": "default1"
+      "content": "This is default content",
+      "type": "default",
+      "fileExists": false,
     },
     {
-      "path": "python_oops/default2.md",
-      "content": "This is default2 content", 
-      "type": "default2"
+      "path": "python_oops/README.md", 
+      "content": "This is new readme content",
+      "type": "README",
+      "fileExists": true, 
     }
-  ]
+  ];
 }
 ```
+
+**New Field: `fileExists`**
+- `false`: File will be created (new file)
+- `true`: File will be updated (existing file)
 
 ## Testing
 
