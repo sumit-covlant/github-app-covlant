@@ -1,8 +1,10 @@
 import GitService from "../services/git-service.js";
+import GitHubStatusService from "../services/github-status.js";
 
 async function githubWebhookPlugin(fastify, options) {
   const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
   const gitService = new GitService();
+  const statusService = new GitHubStatusService();
 
   if (!webhookSecret) {
     console.log(
@@ -133,13 +135,43 @@ async function githubWebhookPlugin(fastify, options) {
       if (process.env.GITHUB_TOKEN && fileChanges.length > 0) {
         try {
           console.log("Starting automated PR analysis workflow...");
+          
+          // Set processing status
+          await statusService.setProcessing(pr.html_url, pr.head.sha, pr.number);
+          
+          // Process the PR and create analysis
           analysisResult = await gitService.processPRAndCreateAnalysis(
             prData,
             fileChanges
           );
+          
           console.log("PR analysis workflow completed successfully!");
+          
+          // Set final status
+          if (analysisResult && analysisResult.success && !analysisResult.skipped) {
+            await statusService.setComplete(
+              pr.html_url, 
+              pr.head.sha, 
+              pr.number, 
+              analysisResult.newPR?.url
+            );
+          } else if (analysisResult && analysisResult.skipped) {
+            await statusService.setSkipped(
+              pr.html_url, 
+              pr.head.sha, 
+              pr.number, 
+              analysisResult.reason || 'No files to analyze'
+            );
+          }
         } catch (error) {
           console.error("PR analysis workflow failed:", error.message);
+          
+          // Set error status
+          try {
+            await statusService.setError(pr.html_url, pr.head.sha, pr.number, error.message);
+          } catch (statusError) {
+            console.error("Failed to set error status:", statusError.message);
+          }
         }
       }
 

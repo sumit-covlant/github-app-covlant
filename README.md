@@ -182,13 +182,15 @@ Auto PR: auto-analysis-pr-123-1234567890 → feature/user-auth
 ### Workflow Execution Order:
 ```
 1. PR Created → Webhook Triggered
-2. Call Analysis API with changed files
-3. Check API Response:
-   ├─ No files? → Skip everything, return success
-   └─ Has files? → Continue to step 4
-4. Create remote branch
-5. Create/update files based on fileExists flags  
-6. Create draft PR
+2. Set GitHub Status: "covlant-app processing PR #X"
+3. Call Analysis API with changed files
+4. Check API Response:
+   ├─ No files? → Set Status: "covlant-app skipped: No files to analyze"
+   └─ Has files? → Continue to step 5
+5. Create remote branch
+6. Create/update files based on fileExists flags
+7. Create draft PR
+8. Set GitHub Status: "covlant-app processing complete for PR #X" (with link)
 ```
 
 The analysis PR will contain these files (if API returns them):
@@ -223,7 +225,8 @@ The webhook automatically detects and ignores auto-generated PRs to prevent infi
 │   ├── plugins/
 │   │   └── github-webhook.js  # Webhook handler
 │   └── services/
-│       └── git-service.js     # Git operations & GitHub API
+│       ├── git-service.js     # Git operations & GitHub API
+│       └── github-status.js   # Simple GitHub status updates
 
 ├── package.json
 ├── env.example

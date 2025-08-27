@@ -28,13 +28,11 @@ server.post("/api/analyze-files", async (request, reply) => {
     files: changedFiles?.map(f => f.filename) || []
   });
 
-  // Simulate API processing time
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await new Promise((resolve) => setTimeout(resolve, 3000));
 
-  // Example: You can return empty array to test the "no files" scenario
-  // const filesToCreate = []; // Uncomment this line to test no files scenario
+  // Uncomment this line to test no files scenario
+  // const filesToCreate = []; 
   
-  // Fixed file paths and content as requested
   const filesToCreate = [
     {
       path: "python_oops/default.md",
