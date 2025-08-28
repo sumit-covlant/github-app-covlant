@@ -99,26 +99,25 @@ Please wait while I ${choice === 'create_pr' ? 'create analysis PR' : 'add analy
       `${index + 1}. **${file.filename}** (${file.status}) - +${file.additions} -${file.deletions}`
     ).join('\n');
 
-    const lastActionMessage = choice === 'create_pr' 
+    const selectedAction = choice === 'create_pr' 
+      ? '**Analyze and create new PR**'
+      : '**Analyze and add to comments**';
+
+    const completionMessage = choice === 'create_pr' 
       ? `Analysis PR created successfully! [View Analysis PR](${result})`
       : 'Analysis results added as comments above successfully!';
 
-    return `## 🔍 Files Changed in this PR
+    return `## ✅ Processing Complete
 
-Hi! I've detected **${fileChanges.length} changed files** in this PR:
+**Your Selection:** ${selectedAction}
+
+**Files Analyzed:** ${fileChanges.length} changed files in this PR:
 
 ${filesList}
 
-### Choose Analysis Option:
-
-- [ ] **Analyze and create new PR** - Create a separate PR with analysis files
-- [ ] **Analyze and add to comments** - Add analysis results as comments on this PR
-
-**Instructions:** Check one of the boxes above to proceed with analysis.
+**Result:** ${completionMessage}
 
 ---
-✅ **Last Action:** ${lastActionMessage}
-
 *🤖 Automated by Covlant App*`;
   };
 
@@ -127,22 +126,15 @@ ${filesList}
       `${index + 1}. **${file.filename}** (${file.status}) - +${file.additions} -${file.deletions}`
     ).join('\n');
 
-    return `## 🔍 Files Changed in this PR
+    return `## ❌ Processing Failed
 
-Hi! I've detected **${fileChanges.length} changed files** in this PR:
+**Files Analyzed:** ${fileChanges.length} changed files in this PR:
 
 ${filesList}
 
-### Choose Analysis Option:
-
-- [ ] **Analyze and create new PR** - Create a separate PR with analysis files
-- [ ] **Analyze and add to comments** - Add analysis results as comments on this PR
-
-**Instructions:** Check one of the boxes above to proceed with analysis.
+**Error:** ${errorMessage}
 
 ---
-❌ **Last Action:** Processing failed - ${errorMessage}
-
 *🤖 Automated by Covlant App*`;
   };
 
@@ -344,7 +336,7 @@ ${apiResponse.filesToCreate.map(f => `- \`${f.path}\` (${f.type})`).join('\n')}
         await processAddComments(prUrl, issue.number, fileChanges, prDetails.commitSha);
       }
       
-      // Restore comment with completion message
+      // Update comment with completion message
       const completedComment = createCompletedComment(fileChanges, choice, result);
       await updateComment(prUrl, comment.id, completedComment);
       
