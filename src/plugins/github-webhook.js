@@ -1,12 +1,27 @@
 import GitService from "../services/git-service.js";
 import GitHubStatusService from "../services/github-status.js";
-import { Octokit } from "@octokit/rest";
+import GitHubAuthService from "../services/github-auth.js";
 
 async function githubWebhookPlugin(fastify, options) {
   const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
   const gitService = new GitService();
   const statusService = new GitHubStatusService();
-  const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+  const githubAuth = new GitHubAuthService();
+  
+  // Initialize Octokit with GitHub App authentication (JWT flow only)
+  let octokit;
+  try {
+    if (!process.env.GITHUB_APP_ID) {
+      throw new Error('GITHUB_APP_ID is required. Please configure GitHub App authentication.');
+    }
+    
+    console.log('🤖 Using GitHub App authentication (JWT flow)');
+    githubAuth.validateConfig();
+    octokit = await githubAuth.getOctokit();
+  } catch (error) {
+    console.error('GitHub App authentication failed:', error.message);
+    throw new Error(`GitHub App authentication required: ${error.message}`);
+  }
 
   if (!webhookSecret) {
     console.log(
@@ -14,8 +29,8 @@ async function githubWebhookPlugin(fastify, options) {
     );
   }
 
-  if (!process.env.GITHUB_TOKEN) {
-    console.log("GITHUB_TOKEN not set. PR creation workflow will be disabled.");
+  if (!process.env.GITHUB_APP_ID) {
+    console.log("GITHUB_APP_ID not configured. PR creation workflow will be disabled.");
   }
 
   // ==================== UTILITY FUNCTIONS ====================
@@ -261,7 +276,7 @@ ${apiResponse.filesToCreate.map(f => `- \`${f.path}\` (${f.type})`).join('\n')}
     console.log("=== END FILE CHANGES ===");
 
     // Create comment with file changes and options (NO processing yet)
-    if (process.env.GITHUB_TOKEN && fileChanges.length > 0) {
+    if (process.env.GITHUB_APP_ID && fileChanges.length > 0) {
       try {
         console.log("Creating comment with file changes and analysis options...");
         const commentBody = createInitialComment(fileChanges);
@@ -367,24 +382,28 @@ ${apiResponse.filesToCreate.map(f => `- \`${f.path}\` (${f.type})`).join('\n')}
   // Function to fetch PR file changes from GitHub API
   const fetchPRFileChanges = async (prUrl) => {
     try {
-      // Convert PR URL to API URL for files
-      // From: https://github.com/owner/repo/pull/123
-      // To: https://api.github.com/repos/owner/repo/pulls/123/files
-      const apiUrl =
-        prUrl
-          .replace("github.com", "api.github.com/repos")
-          .replace("/pull/", "/pulls/") + "/files";
-
-      console.log("Fetching file changes from:", apiUrl);
-
-      const response = await fetch(apiUrl);
-      if (!response.ok) {
-        throw new Error(
-          `GitHub API error: ${response.status} ${response.statusText}`
-        );
+      console.log("Fetching file changes for:", prUrl);
+      
+      // Parse GitHub URL to get owner, repo, and PR number
+      const { owner, repo } = parseGitHubUrl(prUrl);
+      const prNumber = parseInt(prUrl.split('/pull/')[1]);
+      
+      if (!prNumber) {
+        throw new Error('Invalid PR URL - could not extract PR number');
       }
 
-      const files = await response.json();
+      console.log(`Fetching files for PR #${prNumber} in ${owner}/${repo}`);
+
+      // Use authenticated Octokit instance
+      const authenticatedOctokit = await githubAuth.getOctokit(null, prUrl);
+      
+      const response = await authenticatedOctokit.pulls.listFiles({
+        owner,
+        repo,
+        pull_number: prNumber
+      });
+
+      const files = response.data;
       console.log(`Found ${files.length} changed files`);
 
       return files.map((file) => ({
@@ -399,6 +418,12 @@ ${apiResponse.filesToCreate.map(f => `- \`${f.path}\` (${f.type})`).join('\n')}
       }));
     } catch (error) {
       console.error("Error fetching PR file changes:", error.message);
+      if (error.status === 404) {
+        console.error("404 Error - This might be due to:");
+        console.error("1. Repository is private and GitHub App doesn't have access");
+        console.error("2. GitHub App is not installed on this repository");
+        console.error("3. GitHub App permissions are insufficient");
+      }
       return [];
     }
   };

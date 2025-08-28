@@ -1,11 +1,31 @@
 import { Octokit } from "@octokit/rest";
+import GitHubAuthService from "./github-auth.js";
 
 class GitHubStatusService {
   constructor() {
-    this.octokit = new Octokit({
-      auth: process.env.GITHUB_TOKEN,
-    });
+    this.githubAuth = new GitHubAuthService();
+    this.octokit = null; // Will be initialized lazily
     this.appName = "covlant-app";
+  }
+
+  /**
+   * Get authenticated Octokit instance (lazy initialization)
+   */
+  async getOctokit(githubUrl = null) {
+    if (!this.octokit) {
+      try {
+        if (!process.env.GITHUB_APP_ID) {
+          throw new Error('GITHUB_APP_ID is required. Please configure GitHub App authentication.');
+        }
+        
+        console.log('GitHubStatusService: Using GitHub App authentication');
+        this.octokit = await this.githubAuth.getOctokit(null, githubUrl);
+      } catch (error) {
+        console.error('GitHubStatusService authentication failed:', error.message);
+        throw new Error(`GitHub App authentication required: ${error.message}`);
+      }
+    }
+    return this.octokit;
   }
 
   parseGitHubUrl(url) {
@@ -58,7 +78,8 @@ class GitHubStatusService {
         statusData.target_url = targetUrl;
       }
 
-      const response = await this.octokit.repos.createCommitStatus(statusData);
+      const octokit = await this.getOctokit();
+      const response = await octokit.repos.createCommitStatus(statusData);
       
       console.log(`✅ Status set successfully: ${context} - ${state}`);
       return response.data;
