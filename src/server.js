@@ -19,37 +19,48 @@ server.get("/health", async (request, reply) => {
   return { status: "ok", timestamp: new Date().toISOString() };
 });
 
-// Dummy API endpoint for file analysis
+// Dummy API endpoint for file analysis from CNE
 server.post("/api/analyze-files", async (request, reply) => {
   const { changedFiles } = request.body;
 
-  console.log("🔍 Dummy API called with:", {
+  console.log("Dummy API called with:", {
     filesCount: changedFiles?.length || 0,
     files: changedFiles?.map(f => f.filename) || []
   });
 
   await new Promise((resolve) => setTimeout(resolve, 3000));
 
-  // Uncomment this line to test no files scenario
-  // const filesToCreate = []; 
-  
   const filesToCreate = [
     {
-      path: "python_oops/default.md",
-      content: "This is default content",
-      type: "default",
-      fileExists: false, 
+      path: "python_oops/sample_test.py",
+      content: `import unittest
+import calculator
+
+class TestCalculator(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(calculator.add(2, 3), 5)
+        self.assertEqual(calculator.add(-1, 1), 0)
+
+    def test_subtract(self):
+        self.assertEqual(calculator.subtract(5, 3), 2)
+        self.assertEqual(calculator.subtract(0, 3), -3)
+
+if __name__ == "__main__":
+    unittest.main()
+`,
+      type: "sample_test",
+      fileExists: true, 
     },
     {
-      path: "python_oops/README.md", 
-      content: "This is new readme content",
-      type: "README",
-      fileExists: true, 
+      path: "python_oops/new_test.py", 
+      content: `This is a new test file created by CNE`,
+      type: "new_test",
+      fileExists: false, 
     }
   ];
 
   console.log(
-    "📁 Dummy API returning fixed files:",
+    "Dummy API returning fixed files:",
     filesToCreate.map((f) => f.path)
   );
 

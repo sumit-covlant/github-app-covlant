@@ -1,10 +1,37 @@
 import GitService from "../services/git-service.js";
 import GitHubStatusService from "../services/github-status.js";
+import { Octokit } from "@octokit/rest";
 
 async function githubWebhookPlugin(fastify, options) {
   const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
   const gitService = new GitService();
   const statusService = new GitHubStatusService();
+  const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+
+  // Helper function to parse GitHub URL
+  const parseGitHubUrl = (url) => {
+    const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+    if (!match) throw new Error("Invalid GitHub URL");
+    return { owner: match[1], repo: match[2] };
+  };
+
+  // Helper function to create PR comment
+  const createPRComment = async (prUrl, prNumber, commentBody) => {
+    try {
+      const { owner, repo } = parseGitHubUrl(prUrl);
+      const response = await octokit.issues.createComment({
+        owner,
+        repo,
+        issue_number: prNumber,
+        body: commentBody
+      });
+      console.log(`Comment created on PR #${prNumber}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Failed to create comment: ${error.message}`);
+      throw error;
+    }
+  };
 
   if (!webhookSecret) {
     console.log(
@@ -130,48 +157,40 @@ async function githubWebhookPlugin(fastify, options) {
         headBranch: pr.head.ref,
       };
 
-      // Trigger PR analysis workflow if GitHub token is available
-      let analysisResult = null;
+      // Create comment with file changes and options (NO processing yet)
       if (process.env.GITHUB_TOKEN && fileChanges.length > 0) {
         try {
-          console.log("Starting automated PR analysis workflow...");
+          console.log("Creating comment with file changes and analysis options...");
           
-          // Set processing status
-          await statusService.setProcessing(pr.html_url, pr.head.sha, pr.number);
+          // Create file changes list
+          const filesList = fileChanges.map((file, index) => 
+            `${index + 1}. **${file.filename}** (${file.status}) - +${file.additions} -${file.deletions}`
+          ).join('\n');
+
+          // Create comment with checkboxes
+          const commentBody = `## 🔍 Files Changed in this PR
+
+Hi! I've detected **${fileChanges.length} changed files** in this PR:
+
+${filesList}
+
+### Choose Analysis Option:
+
+- [ ] **Analyze and create new PR** - Create a separate PR with analysis files
+- [ ] **Analyze and add to comments** - Add analysis results as comments on this PR
+
+**Instructions:** Check one of the boxes above to proceed with analysis.
+
+---
+*🤖 Automated by Covlant App*`;
+
+          // Create the comment
+          await createPRComment(pr.html_url, pr.number, commentBody);
           
-          // Process the PR and create analysis
-          analysisResult = await gitService.processPRAndCreateAnalysis(
-            prData,
-            fileChanges
-          );
+          console.log("Comment created with analysis options, waiting for user choice...");
           
-          console.log("PR analysis workflow completed successfully!");
-          
-          // Set final status
-          if (analysisResult && analysisResult.success && !analysisResult.skipped) {
-            await statusService.setComplete(
-              pr.html_url, 
-              pr.head.sha, 
-              pr.number, 
-              analysisResult.newPR?.url
-            );
-          } else if (analysisResult && analysisResult.skipped) {
-            await statusService.setSkipped(
-              pr.html_url, 
-              pr.head.sha, 
-              pr.number, 
-              analysisResult.reason || 'No files to analyze'
-            );
-          }
         } catch (error) {
-          console.error("PR analysis workflow failed:", error.message);
-          
-          // Set error status
-          try {
-            await statusService.setError(pr.html_url, pr.head.sha, pr.number, error.message);
-          } catch (statusError) {
-            console.error("Failed to set error status:", statusError.message);
-          }
+          console.error("Failed to create analysis comment:", error.message);
         }
       }
 
@@ -192,6 +211,247 @@ async function githubWebhookPlugin(fastify, options) {
               analysisId: analysisResult.analysisId,
             }
           : null,
+      };
+    }
+
+    // Handle comment events (checkbox clicks)
+    if (eventType === "issue_comment" && body.action === "edited") {
+      const comment = body.comment;
+      const issue = body.issue;
+      const repo = body.repository;
+      
+      // Check if this is a PR comment
+      if (issue.pull_request) {
+        console.log("PR Comment edited:", {
+          prNumber: issue.number,
+          commentId: comment.id,
+          repository: repo.full_name,
+        });
+        
+        // Check which checkbox was selected
+        let choice = null;
+        if (comment.body.includes('- [x] **Analyze and create new PR**')) {
+          choice = 'create_pr';
+        } else if (comment.body.includes('- [x] **Analyze and add to comments**')) {
+          choice = 'add_comments';
+        }
+        
+        console.log("Detected choice:", choice);
+        
+        if (choice) {
+          try {
+            console.log(`Processing choice: ${choice}`);
+            
+            // Update original comment to show "UT is being generated"
+            const processingComment = `## 🔍 Files Changed in this PR
+
+**Status:** 🔄 **UT is being generated...** 
+
+Please wait while I ${choice === 'create_pr' ? 'create analysis PR' : 'add analysis comments'}.
+
+---
+*🤖 Automated by Covlant App*`;
+
+            await octokit.issues.updateComment({
+              owner: parseGitHubUrl(issue.html_url.replace('/issues/', '/pull/')).owner,
+              repo: parseGitHubUrl(issue.html_url.replace('/issues/', '/pull/')).repo,
+              comment_id: comment.id,
+              body: processingComment
+            });
+            
+            // Get PR details
+            const prUrl = issue.html_url.replace('/issues/', '/pull/');
+            const { owner, repo: repoName } = parseGitHubUrl(prUrl);
+            const prDetails = await octokit.pulls.get({
+              owner,
+              repo: repoName,
+              pull_number: issue.number
+            });
+            const commitSha = prDetails.data.head.sha;
+            
+            // Set processing status
+            await statusService.setProcessing(prUrl, commitSha, issue.number);
+            
+            // Fetch file changes
+            const fileChanges = await fetchPRFileChanges(prUrl);
+            
+            // Store original file list for restoring comment later
+            const originalFilesList = fileChanges.map((file, index) => 
+              `${index + 1}. **${file.filename}** (${file.status}) - +${file.additions} -${file.deletions}`
+            ).join('\n');
+            
+            // Call analysis API
+            const apiResponse = await gitService.callAnalysisAPI(fileChanges);
+            
+            if (choice === 'create_pr') {
+              console.log("Creating analysis PR...");
+              
+              // Create analysis PR using existing functionality
+              const prData = {
+                number: issue.number,
+                title: issue.title,
+                url: prUrl,
+                author: issue.user.login,
+                repository: repo.full_name,
+                createdAt: issue.created_at,
+                baseBranch: prDetails.data.base.ref,
+                headBranch: prDetails.data.head.ref,
+              };
+              
+              const analysisResult = await gitService.processPRAndCreateAnalysis(prData, fileChanges);
+              
+              // Set success status
+              await statusService.setComplete(prUrl, commitSha, issue.number, analysisResult.newPR?.url);
+              
+              // Restore original comment with checkboxes and completion message
+              const completedComment = `## 🔍 Files Changed in this PR
+
+Hi! I've detected **${fileChanges.length} changed files** in this PR:
+
+${originalFilesList}
+
+### Choose Analysis Option:
+
+- [ ] **Analyze and create new PR** - Create a separate PR with analysis files
+- [ ] **Analyze and add to comments** - Add analysis results as comments on this PR
+
+**Instructions:** Check one of the boxes above to proceed with analysis.
+
+---
+✅ **Last Action:** Analysis PR created successfully! [View Analysis PR](${analysisResult.newPR?.url})
+
+*🤖 Automated by Covlant App*`;
+
+              await octokit.issues.updateComment({
+                owner: parseGitHubUrl(prUrl).owner,
+                repo: parseGitHubUrl(prUrl).repo,
+                comment_id: comment.id,
+                body: completedComment
+              });
+              
+            } else if (choice === 'add_comments') {
+              console.log("Adding analysis as comments (NO PR creation)...");
+              
+              // ONLY add analysis results as comments - DO NOT create PR
+              if (apiResponse?.filesToCreate && apiResponse.filesToCreate.length > 0) {
+                for (const file of apiResponse.filesToCreate) {
+                  const fileCommentBody = `## 📁 Analysis Result: \`${file.path}\`
+
+**File Type:** ${file.type}
+**Status:** ${file.fileExists ? 'Update existing file' : 'Create new file'}
+
+### Content:
+\`\`\`${file.path.split('.').pop()}
+${file.content}
+\`\`\`
+
+---
+*Generated by Covlant Analysis*`;
+
+                  await createPRComment(prUrl, issue.number, fileCommentBody);
+                  console.log(`✅ Added analysis comment for ${file.path}`);
+                }
+                
+                // Add summary comment
+                const summaryBody = `## ✅ Analysis Complete
+
+Added **${apiResponse.filesToCreate.length} analysis files** as comments above.
+
+**Files generated:**
+${apiResponse.filesToCreate.map(f => `- \`${f.path}\` (${f.type})`).join('\n')}
+
+*Note: Analysis results added as comments only - no additional PR was created.*`;
+
+                await createPRComment(prUrl, issue.number, summaryBody);
+              } else {
+                await createPRComment(prUrl, issue.number, `## 📝 Analysis Results\n\nNo analysis files were generated for this PR.`);
+              }
+              
+              // Set success status (no PR URL since we didn't create one)
+              await statusService.setComplete(prUrl, commitSha, issue.number, null);
+              
+              // Restore original comment with checkboxes and completion message
+              const completedComment = `## 🔍 Files Changed in this PR
+
+Hi! I've detected **${fileChanges.length} changed files** in this PR:
+
+${originalFilesList}
+
+### Choose Analysis Option:
+
+- [ ] **Analyze and create new PR** - Create a separate PR with analysis files
+- [ ] **Analyze and add to comments** - Add analysis results as comments on this PR
+
+**Instructions:** Check one of the boxes above to proceed with analysis.
+
+---
+✅ **Last Action:** Analysis results added as comments above successfully!
+
+*🤖 Automated by Covlant App*`;
+
+              await octokit.issues.updateComment({
+                owner: parseGitHubUrl(prUrl).owner,
+                repo: parseGitHubUrl(prUrl).repo,
+                comment_id: comment.id,
+                body: completedComment
+              });
+            }
+            
+          } catch (error) {
+            console.error("Error processing choice:", error.message);
+            
+            // Set error status
+            const prUrl = issue.html_url.replace('/issues/', '/pull/');
+            const { owner, repo: repoName } = parseGitHubUrl(prUrl);
+            const prDetails = await octokit.pulls.get({
+              owner,
+              repo: repoName,
+              pull_number: issue.number
+            });
+            await statusService.setError(prUrl, prDetails.data.head.sha, issue.number, error.message);
+            
+            // Restore original comment with checkboxes and error message
+            try {
+              const fileChanges = await fetchPRFileChanges(prUrl);
+              const originalFilesList = fileChanges.map((file, index) => 
+                `${index + 1}. **${file.filename}** (${file.status}) - +${file.additions} -${file.deletions}`
+              ).join('\n');
+              
+              const errorComment = `## 🔍 Files Changed in this PR
+
+Hi! I've detected **${fileChanges.length} changed files** in this PR:
+
+${originalFilesList}
+
+### Choose Analysis Option:
+
+- [ ] **Analyze and create new PR** - Create a separate PR with analysis files
+- [ ] **Analyze and add to comments** - Add analysis results as comments on this PR
+
+**Instructions:** Check one of the boxes above to proceed with analysis.
+
+---
+❌ **Last Action:** Processing failed - ${error.message}
+
+*🤖 Automated by Covlant App*`;
+
+              await octokit.issues.updateComment({
+                owner: parseGitHubUrl(prUrl).owner,
+                repo: parseGitHubUrl(prUrl).repo,
+                comment_id: comment.id,
+                body: errorComment
+              });
+            } catch (restoreError) {
+              console.error("Failed to restore comment after error:", restoreError.message);
+            }
+          }
+        }
+      }
+      
+      return {
+        success: true,
+        message: "Comment processed",
+        choice: choice || 'none',
       };
     }
 
