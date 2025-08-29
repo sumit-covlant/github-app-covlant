@@ -64,13 +64,15 @@ if __name__ == "__main__":
     filesToCreate.map((f) => f.path)
   );
 
-  return {
+  const result = {
     success: true,
     message: "File analysis completed",
     analysisId: `analysis-${Date.now()}`,
     filesToCreate: filesToCreate,
     timestamp: new Date().toISOString(),
-  };
+  }
+
+  return result;
 });
 
 // Start server
@@ -82,7 +84,7 @@ const start = async () => {
     await server.listen({ port, host });
     console.log(`🚀 Server listening on ${host}:${port}`);
   } catch (err) {
-    console.error("Server error:", err);
+    console.error("❌Server error:", err);
     process.exit(1);
   }
 };

@@ -9,9 +9,9 @@ class GitHubAuthService {
     this.privateKeyPath = process.env.GITHUB_APP_PRIVATE_KEY_PATH;
     this.installationId = process.env.GITHUB_APP_INSTALLATION_ID || null; // Optional - will auto-detect
     
-    // Cache for installation tokens and installations
-    this.tokenCache = new Map();
-    this.installationCache = new Map();
+    // Cache for installation tokens, installations, and repo-to-installation mapping
+    this.tokenCache = new Map(); // Cache token by owner/repo
+    this.repoInstallationCache = new Map(); // Cache repo -> installation ID mapping
     this.TOKEN_EXPIRY_BUFFER = 5 * 60 * 1000; // 5 minutes buffer before expiry
   }
 
@@ -56,14 +56,7 @@ class GitHubAuthService {
    * Get all installations for this GitHub App
    */
   async getInstallations() {
-    const cacheKey = 'app_installations';
-    const cached = this.installationCache.get(cacheKey);
     
-    if (cached && cached.expiresAt > Date.now()) {
-      console.log('Using cached installations list');
-      return cached.installations;
-    }
-
     console.log('Fetching app installations...');
     
     const appJWT = this.generateJWT();
@@ -73,16 +66,10 @@ class GitHubAuthService {
       const response = await appOctokit.apps.listInstallations();
       const installations = response.data;
 
-      // Cache for 10 minutes
-      this.installationCache.set(cacheKey, {
-        installations,
-        expiresAt: Date.now() + (10 * 60 * 1000)
-      });
-
       console.log(`Found ${installations.length} installations`);
       return installations;
     } catch (error) {
-      console.error('Failed to get installations:', error.message);
+      console.error('❌ Failed to get installations:', error.message);
       throw new Error(`Failed to get app installations: ${error.message}`);
     }
   }
@@ -92,26 +79,46 @@ class GitHubAuthService {
    */
   async findInstallationForRepo(owner, repo) {
     const installations = await this.getInstallations();
+    console.log(`Searching for repository ${owner}/${repo} across ${installations.length} installations...`);
     
     for (const installation of installations) {
       try {
-        const appJWT = this.generateJWT();
-        const appOctokit = new Octokit({ auth: appJWT });
+        console.log(`Checking installation ${installation.id} (account: ${installation.account.login}, type: ${installation.account.type})`);
         
-        // Get repositories for this installation
-        const reposResponse = await appOctokit.apps.listReposAccessibleToInstallation({
-          installation_id: installation.id
-        });
-        
-        // Check if our target repo is in this installation
-        const targetRepo = reposResponse.data.repositories.find(
-          r => r.owner.login.toLowerCase() === owner.toLowerCase() && 
-               r.name.toLowerCase() === repo.toLowerCase()
-        );
-        
-        if (targetRepo) {
-          console.log(`Found installation ${installation.id} for ${owner}/${repo}`);
-          return installation.id;
+        // First check if the installation account matches the repository owner
+        if (installation.account.login.toLowerCase() === owner.toLowerCase()) {
+          console.log(`Found matching account installation ${installation.id} for ${owner}/${repo}`);
+          
+          // Verify by trying to get an installation token and checking repository access
+          const appJWT = this.generateJWT();
+          const appOctokit = new Octokit({ auth: appJWT });
+          
+          const tokenResponse = await appOctokit.apps.createInstallationAccessToken({
+            installation_id: installation.id
+          });
+          
+          // Use the installation token to verify repository access
+          const installationOctokit = new Octokit({ auth: tokenResponse.data.token });
+          
+          // Try to access the specific repository to confirm permissions
+          try {
+            await installationOctokit.repos.get({
+              owner: owner,
+              repo: repo
+            });
+            
+            console.log(`✅ Confirmed access to ${owner}/${repo} via installation ${installation.id}`);
+            
+            // Cache the repo -> installation mapping for faster future lookups
+            const repoKey = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+            this.repoInstallationCache.set(repoKey, installation.id);
+            console.log(`📦 Cached installation mapping: ${repoKey} → ${installation.id}`);
+            
+            return installation.id;
+          } catch (repoError) {
+            console.warn(`Installation ${installation.id} matches account but cannot access repository:`, repoError.message);
+            continue;
+          }
         }
       } catch (error) {
         console.warn(`Failed to check installation ${installation.id}:`, error.message);
@@ -119,39 +126,53 @@ class GitHubAuthService {
       }
     }
     
-    throw new Error(`No installation found for repository ${owner}/${repo}`);
+    throw new Error(`No installation found for repository ${owner}/${repo}. Make sure the GitHub App is installed on this repository.`);
   }
 
   /**
    * Auto-detect installation ID from GitHub URL or repository info
    */
-  async autoDetectInstallationId(githubUrl = null) {
-    if (this.installationId) {
-      return this.installationId;
-    }
-
-    if (githubUrl) {
-      // Extract owner/repo from URL
-      const match = githubUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-      if (match) {
-        const [, owner, repo] = match;
-        console.log(`Auto-detecting installation for ${owner}/${repo}...`);
+  async autoDetectInstallationId(owner = null, repo = null) {
+    if (owner && repo) {
+      const repoKey = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+      
+      // Check if we have a cached installation ID for this specific repository
+      const cachedInstallationId = this.repoInstallationCache.get(repoKey);
+      if (cachedInstallationId) {
+        console.log(`✅ Using cached installation ID for ${owner}/${repo}: ${cachedInstallationId}`);
+        return cachedInstallationId;
+      }
+      
+      console.log(`🔍 Auto-detecting installation for ${owner}/${repo}...`);
+      
+      try {
         const installationId = await this.findInstallationForRepo(owner, repo);
-        this.installationId = installationId; // Cache for future use
+        // Note: findInstallationForRepo already caches the mapping
+        console.log(`✅ Auto-detected installation ID: ${installationId}`);
         return installationId;
+      } catch (error) {
+        console.error(`❌ Failed to find installation for ${owner}/${repo}:`, error.message);
+        throw error;
       }
     }
 
+    // Fallback: Check if we have a global cached installation ID
+    if (this.installationId) {
+      console.log(`Using global cached installation ID: ${this.installationId}`);
+      return this.installationId;
+    }
+
     // If no specific repo, try to get the first available installation
+    console.log('🔍 No specific repository provided, using first available installation...');
     const installations = await this.getInstallations();
     if (installations.length > 0) {
       const installationId = installations[0].id;
-      console.log(`Using first available installation: ${installationId}`);
+      console.log(`✅ Using first available installation: ${installationId} (${installations[0].account.login})`);
       this.installationId = installationId; // Cache for future use
       return installationId;
     }
 
-    throw new Error('No GitHub App installations found. Please install the app on at least one repository.');
+    throw new Error('❌ No GitHub App installations found. Please install the app on at least one repository.');
   }
 
   /**
@@ -159,23 +180,40 @@ class GitHubAuthService {
    */
   async getInstallationToken(installationId = null, githubUrl = null) {
     let targetInstallationId = installationId || this.installationId;
-    
+    let owner = null;
+    let repo = null;
+
+    // Extract owner and repo from githubUrl if provided
+    if (githubUrl) {
+      const match = githubUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+      if (match) {
+        [, owner, repo] = match;
+        owner = owner.toLowerCase();
+        repo = repo.toLowerCase();
+      }
+    }
+
+    // Check if we have a valid cached token using repository-based key
+    let cacheKey = null;
+    if (owner && repo) {
+      cacheKey = `token/${owner}/${repo}`;
+      
+      const cachedToken = this.tokenCache.get(cacheKey);
+      
+      if (cachedToken && cachedToken.expiresAt > Date.now() + this.TOKEN_EXPIRY_BUFFER) {
+        const expiresIn = Math.round((cachedToken.expiresAt - Date.now()) / 1000 / 60);
+        console.log(`✅ Using cached installation token for ${owner}/${repo} (expires in ${expiresIn} minutes)`);
+        return cachedToken.token;
+      }
+    }
+
     // Auto-detect installation ID if not provided
     if (!targetInstallationId) {
-      console.log('Installation ID not provided, auto-detecting...');
-      targetInstallationId = await this.autoDetectInstallationId(githubUrl);
+      console.log('🔍 Installation ID not provided, auto-detecting...');
+      targetInstallationId = await this.autoDetectInstallationId(owner, repo);
     }
 
-    // Check if we have a valid cached token
-    const cacheKey = `installation_${targetInstallationId}`;
-    const cachedToken = this.tokenCache.get(cacheKey);
-    
-    if (cachedToken && cachedToken.expiresAt > Date.now() + this.TOKEN_EXPIRY_BUFFER) {
-      console.log('Using cached installation token');
-      return cachedToken.token;
-    }
-
-    console.log('Fetching new installation token...');
+    console.log(`🔄 Generating new installation token for installation ${targetInstallationId}...`);
     
     // Create Octokit instance with JWT for app authentication
     const appJWT = this.generateJWT();
@@ -192,16 +230,23 @@ class GitHubAuthService {
       const token = response.data.token;
       const expiresAt = new Date(response.data.expires_at).getTime();
 
-      // Cache the token
-      this.tokenCache.set(cacheKey, {
-        token,
-        expiresAt
-      });
-
-      console.log('New installation token obtained, expires at:', new Date(expiresAt).toISOString());
+      // Cache the token if we have a valid cache key
+      if (cacheKey) {
+        this.tokenCache.set(cacheKey, {
+          token,
+          expiresAt
+        });
+        
+        const expiresIn = Math.round((expiresAt - Date.now()) / 1000 / 60);
+        console.log(`✅ New installation token generated and cached with key: ${cacheKey} (expires in ${expiresIn} minutes)`);
+      } else {
+        const expiresIn = Math.round((expiresAt - Date.now()) / 1000 / 60);
+        console.log(`✅ New installation token generated (expires in ${expiresIn} minutes)`);
+      }
+      
       return token;
     } catch (error) {
-      console.error('Failed to get installation token:', error.message);
+      console.error('❌ Failed to get installation token:', error.message);
       throw new Error(`Failed to authenticate GitHub App: ${error.message}`);
     }
   }
@@ -228,12 +273,6 @@ class GitHubAuthService {
     }
 
     const privateKey = this.getPrivateKey();
-
-    const auth = createAppAuth({
-      appId: this.appId,
-      privateKey: privateKey,
-      installationId: targetInstallationId,
-    });
 
     return new Octokit({
       authStrategy: createAppAuth,
@@ -283,7 +322,7 @@ class GitHubAuthService {
       const response = await appOctokit.apps.getAuthenticated();
       return response.data;
     } catch (error) {
-      console.error('Failed to get app info:', error.message);
+      console.error('❌ Failed to get app info:', error.message);
       throw error;
     }
   }

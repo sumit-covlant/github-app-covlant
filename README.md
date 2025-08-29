@@ -1,19 +1,19 @@
-# Simple Fastify GitHub Webhook
+# GitHub App Webhook with Interactive Analysis
 
-A minimal Fastify webhook server that captures all details when a Pull Request is created on GitHub.
+A comprehensive GitHub App webhook server that provides interactive code analysis for Pull Requests with GitHub App JWT authentication.
 
 ## What It Does
 
 When a PR is created, this webhook will:
-- ✅ Capture all PR details (title, description, author, labels, etc.)
-- ✅ Log everything to the console
-- ✅ Return a success response to GitHub
-- ✅ Validate webhook signatures for security
-- 🆕 **Automatically create a remote branch with analysis files**
-- 🆕 **Generate summary and metadata files at the same directory level**
-- 🆕 **Create a draft PR stacked on top of the original PR**
-- 🆕 **No local cloning required - all operations via GitHub API**
-- 🛡️ **Loop prevention - automatically ignores self-generated PRs**
+- ✅ **Interactive PR Analysis** - Posts comment with checkbox options for developers
+- ✅ **GitHub App Authentication** - Uses JWT tokens for secure bot-like interactions  
+- ✅ **Repository Status Updates** - Shows real-time processing status on GitHub
+- ✅ **Smart Installation Detection** - Auto-detects GitHub App installation across multiple accounts
+- ✅ **Dual Analysis Options**:
+  - 📝 **Create Analysis PR** - Generate separate PR with analysis files
+  - 💬 **Add Comments** - Post analysis results directly as PR comments
+- ✅ **Repository-Based Token Caching** - Optimized for multi-repository deployments
+- 🛡️ **Loop prevention** - Automatically ignores self-generated PRs
 
 ## Quick Start
 
@@ -22,20 +22,36 @@ When a PR is created, this webhook will:
 npm install
 ```
 
-### 2. Set Environment Variables
+### 2. Set Up GitHub App Authentication
+
+Create your `.env` file:
 ```bash
 cp env.example .env
 ```
 
-Edit `.env` and add your configuration:
+Configure GitHub App authentication in `.env`:
 ```bash
+# GitHub App Authentication (Required)
+GITHUB_APP_ID=your_github_app_id_here
+GITHUB_APP_PRIVATE_KEY_PATH=./private-key.pem
+
+# Webhook Configuration
 GITHUB_WEBHOOK_SECRET=your_webhook_secret_here
-GITHUB_TOKEN=your_github_personal_access_token_here
+
+# Server Configuration
+PORT=3000
+API_BASE_URL=http://localhost:3000
 ```
 
-**Important**: You need a GitHub Personal Access Token with the following permissions:
-- `repo` (Full control of private repositories)
-- `workflow` (Update GitHub Action workflows)
+**GitHub App Setup Required**: You need to create a GitHub App with these permissions:
+- ✅ **Contents**: Read & Write (for creating files)
+- ✅ **Issues**: Read & Write (for PR comments)
+- ✅ **Pull requests**: Read & Write (for PR operations)
+- ✅ **Commit statuses**: Read & Write (for status updates)
+
+**Webhook Events Required**:
+- ✅ **Pull requests** (for PR creation)
+- ✅ **Issue comments** (for checkbox interactions)
 
 ### 3. Start the Server
 ```bash
@@ -48,33 +64,46 @@ npm start
 
 Server runs on `http://localhost:3000`
 
-## GitHub Setup
+## GitHub App Setup
 
-### 1. Create Webhook in Your Repository
-1. Go to **Settings** → **Webhooks**
-2. Click **"Add webhook"**
+### 1. Create GitHub App
+1. Go to **GitHub** → **Settings** → **Developer settings** → **GitHub Apps**
+2. Click **"New GitHub App"**
 3. Configure:
-   - **Payload URL**: `https://your-domain.com/webhook/github`
-   - **Content type**: `application/json`
-   - **Secret**: Same value as `GITHUB_WEBHOOK_SECRET`
-   - **Events**: Select **"Just the pull_request event"**
+   - **GitHub App name**: `your-bot-name` (this will be the comment author)
+   - **Homepage URL**: `http://localhost:3000` (or your domain)
+   - **Webhook URL**: `https://your-domain.com/` (your webhook endpoint)
+   - **Webhook secret**: Same value as `GITHUB_WEBHOOK_SECRET`
 
-### 2. Test the Webhook
-Create a Pull Request in your repository to trigger the webhook.
+### 2. Set Permissions & Events
+**Repository permissions:**
+- Contents: Read & Write
+- Issues: Read & Write  
+- Pull requests: Read & Write
+- Commit statuses: Read & Write
+
+**Subscribe to events:**
+- Pull requests
+- Issue comments
+
+### 3. Install & Configure
+1. **Generate private key** and save as `private-key.pem`
+2. **Install the app** on your repositories
+3. **Copy App ID** to your `.env` file
+4. The app will **auto-detect Installation ID** for each repository
+
+### 4. Test the Setup
+Create a Pull Request to see the interactive comment with analysis options.
 
 ## API Endpoints
 
 ### GitHub Webhook
 ```
-POST /webhook/github
+POST /
 ```
-Handles GitHub webhook events. Logs all PR creation details.
-
-### Test Endpoint (Development)
-```
-POST /webhook/test
-```
-Simulates a webhook for testing.
+Handles GitHub webhook events:
+- **Pull Request Created**: Posts interactive comment with analysis options
+- **Issue Comment Edited**: Detects checkbox selections and processes accordingly
 
 ### Health Check
 ```
@@ -148,56 +177,69 @@ When a PR is created, you'll see:
 - Creation timestamp
 - And more...
 
-## 🚀 Automated PR Analysis Feature
+## 🚀 Interactive PR Analysis Workflow
 
-When a PR is created, the system will **automatically**:
+### **Step 1: PR Created → Interactive Comment**
+When a PR is created, the bot automatically:
+1. **Sets GitHub Status**: `covlant-app analyzing PR #X`
+2. **Fetches file changes** from the PR
+3. **Posts interactive comment** with file summary and analysis options:
 
-### 1. **Analyze File Changes**
-- Extract file metadata (additions, deletions, status) from the PR
-- Pass changed files data to analysis API
+```markdown
+## 🔍 Files Changed in this PR
 
-### 2. **Call Analysis API First**
-- Calls internal API (`/api/analyze-files`) with changed files data
-- API returns file paths, content, and `fileExists` flags
-- **Early exit**: If no files returned, skips branch/PR creation entirely
+Hi! I've detected 3 changed files in this PR:
+1. **src/main.js** (modified) - +10 -5
+2. **tests/test.js** (added) - +25 -0  
+3. **README.md** (modified) - +2 -1
 
-### 3. **Create Remote Branch & Files (Only if files exist)**
-- Creates a remote branch: `auto-analysis-pr-{PR_NUMBER}-{TIMESTAMP}`
-- Based on the original PR's head branch (stacked on top)
-- **Smart file handling**: Creates new files or updates existing ones based on `fileExists` flag
-- Uses GitHub API - no local cloning required
+### Choose Analysis Option:
+- [ ] **Analyze and create new PR** - Create a separate PR with analysis files
+- [ ] **Analyze and add to comments** - Add analysis results as comments on this PR
 
-### 4. **Create Draft PR**
-- Automatically creates a **draft PR** with the analysis files
-- Links back to the original PR for context
-- Only created if files were successfully created
+**Instructions:** Check one of the boxes above to proceed with analysis.
 
-### Example Workflow
+---
+*🤖 Automated by Covlant App*
+```
+
+### **Step 2: Developer Interaction**
+Developer selects one option by checking a checkbox. The bot detects the selection and:
+
+### **Step 3A: Create Analysis PR Option**
+If "Create new PR" is selected:
+1. **Updates comment**: Shows processing status
+2. **Sets GitHub Status**: `covlant-app processing PR #X`
+3. **Calls analysis API** with changed files
+4. **Creates remote branch**: `auto-analysis-pr-{PR_NUMBER}-{TIMESTAMP}`
+5. **Creates analysis files** in the new branch
+6. **Creates draft PR** stacked on the original PR
+7. **Updates comment**: Shows completion with PR link
+8. **Sets GitHub Status**: `covlant-app processing complete` (with link)
+
+### **Step 3B: Add Comments Option**
+If "Add to comments" is selected:
+1. **Updates comment**: Shows processing status  
+2. **Sets GitHub Status**: `covlant-app processing PR #X`
+3. **Calls analysis API** with changed files
+4. **Posts analysis results** as individual comments on the PR
+5. **Updates comment**: Shows completion summary
+6. **Sets GitHub Status**: `covlant-app processing complete`
+
+### **Example Workflows**
+
+#### **Create PR Workflow:**
 ```
 Original PR: feature/user-auth → main
-   ↓ (webhook triggers)
-Auto PR: auto-analysis-pr-123-1234567890 → feature/user-auth
+   ↓ (developer selects "Create new PR")
+Analysis PR: auto-analysis-pr-123-1234567890 → feature/user-auth
 ```
 
-### Workflow Execution Order:
+#### **Add Comments Workflow:**
 ```
-1. PR Created → Webhook Triggered
-2. Set GitHub Status: "covlant-app processing PR #X"
-3. Call Analysis API with changed files
-4. Check API Response:
-   ├─ No files? → Set Status: "covlant-app skipped: No files to analyze"
-   └─ Has files? → Continue to step 5
-5. Create remote branch
-6. Create/update files based on fileExists flags
-7. Create draft PR
-8. Set GitHub Status: "covlant-app processing complete for PR #X" (with link)
-```
-
-The analysis PR will contain these files (if API returns them):
-```
-python_oops/
-├── default.md       # "This is default content"
-└── README.md        # "This is new readme content"
+Original PR: feature/user-auth → main
+   ↓ (developer selects "Add to comments")  
+PR gets multiple analysis comments with file contents
 ```
 
 ## 🛡️ Loop Prevention
@@ -218,30 +260,74 @@ The webhook automatically detects and ignores auto-generated PRs to prevent infi
   - Detection: Branch pattern matched
 ```
 
-## Project Structure
+## 🏗️ Architecture & Authentication Flow
+
+### **GitHub App JWT Authentication**
+```
+1. JWT Generation (App-level)
+   ├─ Private Key + App ID → Signed JWT (10 min expiry)
+   └─ Used for: Listing installations, getting installation tokens
+
+2. Installation Detection (Repository-specific)  
+   ├─ Auto-detect installation for each repository
+   ├─ Cache: repo → installation ID mapping
+   └─ Support for multiple GitHub accounts/organizations
+
+3. Installation Token (Repository access)
+   ├─ JWT + Installation ID → Installation Token (1 hour expiry) 
+   ├─ Cache: token/{owner}/{repo} → installation token
+   └─ Used for: All repository operations (comments, PRs, status)
+
+4. Repository Operations
+   ├─ Authenticated Octokit with installation token
+   └─ Bot appears as "your-github-app-name" in comments
+```
+
+### **Multi-Account Support**
+The system supports GitHub Apps installed across multiple accounts:
+```
+✅ Personal account: "john-dev/my-project" → Installation #12345
+✅ Company account: "acme-corp/backend" → Installation #67890  
+✅ Client account: "client-org/frontend" → Installation #54321
+```
+
+### **Project Structure**
 ```
 ├── src/
-│   ├── server.js              # Main server
+│   ├── server.js                 # Fastify server with mock analysis API
 │   ├── plugins/
-│   │   └── github-webhook.js  # Webhook handler
+│   │   └── github-webhook.js     # Main webhook handler & interactive logic
 │   └── services/
-│       ├── git-service.js     # Git operations & GitHub API
-│       └── github-status.js   # Simple GitHub status updates
-
+│       ├── github-auth.js        # 🆕 GitHub App JWT authentication
+│       ├── git-service.js        # Git operations & GitHub API calls
+│       └── github-status.js      # GitHub commit status updates
+├── private-key.pem               # GitHub App private key
 ├── package.json
-├── env.example
-└── test-simple.js             # Test script
+└── env.example
 ```
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server port | `3000` |
-| `HOST` | Server host | `0.0.0.0` |
-| `NODE_ENV` | Environment | `development` |
-| `GITHUB_WEBHOOK_SECRET` | GitHub webhook secret | Required |
-| `GITHUB_TOKEN` | GitHub Personal Access Token | Required for PR creation |
-| `API_BASE_URL` | Base URL for analysis API calls | `http://localhost:3000` |
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `GITHUB_APP_ID` | GitHub App ID | ✅ Yes | - |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | Path to private key file | ✅ Yes | `./private-key.pem` |
+| `GITHUB_APP_PRIVATE_KEY` | Private key content (alternative) | ❌ No | - |
+| `GITHUB_APP_INSTALLATION_ID` | Installation ID (auto-detected) | ❌ No | Auto-detect |
+| `GITHUB_WEBHOOK_SECRET` | Webhook signature validation | ⚠️ Recommended | - |
+| `PORT` | Server port | ❌ No | `3000` |
+| `HOST` | Server host | ❌ No | `0.0.0.0` |
+| `NODE_ENV` | Environment | ❌ No | `development` |
+| `API_BASE_URL` | Analysis API base URL | ❌ No | `http://localhost:3000` |
 
-That's it! Simple and focused on just capturing PR details.
+## 🚀 Ready to Go!
+
+This GitHub App provides a complete interactive analysis workflow with:
+- ✅ **Secure GitHub App authentication** (no personal tokens needed)
+- ✅ **Multi-account support** (works across organizations)  
+- ✅ **Interactive developer experience** (checkbox-driven workflow)
+- ✅ **Flexible analysis options** (PR creation or comments)
+- ✅ **Real-time status updates** on GitHub
+- ✅ **Repository-optimized caching** for performance
+
+Perfect for teams wanting automated code analysis with developer control! 🎯

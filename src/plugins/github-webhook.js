@@ -4,23 +4,26 @@ import GitHubAuthService from "../services/github-auth.js";
 
 async function githubWebhookPlugin(fastify, options) {
   const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
-  const gitService = new GitService();
-  const statusService = new GitHubStatusService();
+  
+  // Create shared GitHub Auth service instance
   const githubAuth = new GitHubAuthService();
   
-  // Initialize Octokit with GitHub App authentication (JWT flow only)
-  let octokit;
+  // Pass shared auth service to other services
+  const gitService = new GitService(githubAuth);
+  const statusService = new GitHubStatusService(githubAuth);
+  
+  // Validate GitHub App configuration (but don't generate tokens yet)
   try {
     if (!process.env.GITHUB_APP_ID) {
       throw new Error('GITHUB_APP_ID is required. Please configure GitHub App authentication.');
     }
     
-    console.log('🤖 Using GitHub App authentication (JWT flow)');
+    console.log('🤖 GitHub App authentication configured (JWT flow)');
     githubAuth.validateConfig();
-    octokit = await githubAuth.getOctokit();
+    console.log('✅ GitHub App configuration validated - tokens will be generated on-demand');
   } catch (error) {
-    console.error('GitHub App authentication failed:', error.message);
-    throw new Error(`GitHub App authentication required: ${error.message}`);
+    console.error('❌GitHub App configuration failed:', error.message);
+    throw new Error(`GitHub App configuration required: ${error.message}`);
   }
 
   if (!webhookSecret) {
@@ -44,6 +47,7 @@ async function githubWebhookPlugin(fastify, options) {
   const createPRComment = async (prUrl, prNumber, commentBody) => {
     try {
       const { owner, repo } = parseGitHubUrl(prUrl);
+      const octokit = await githubAuth.getOctokit(null, prUrl);
       const response = await octokit.issues.createComment({
         owner,
         repo,
@@ -53,7 +57,7 @@ async function githubWebhookPlugin(fastify, options) {
       console.log(`Comment created on PR #${prNumber}`);
       return response.data;
     } catch (error) {
-      console.error(`Failed to create comment: ${error.message}`);
+      console.error(`❌Failed to create comment: ${error.message}`);
       throw error;
     }
   };
@@ -61,6 +65,7 @@ async function githubWebhookPlugin(fastify, options) {
   const updateComment = async (prUrl, commentId, commentBody) => {
     try {
       const { owner, repo } = parseGitHubUrl(prUrl);
+      const octokit = await githubAuth.getOctokit(null, prUrl);
       await octokit.issues.updateComment({
         owner,
         repo,
@@ -69,7 +74,7 @@ async function githubWebhookPlugin(fastify, options) {
       });
       console.log(`Comment ${commentId} updated`);
     } catch (error) {
-      console.error(`Failed to update comment: ${error.message}`);
+      console.error(`❌Failed to update comment: ${error.message}`);
       throw error;
     }
   };
@@ -176,6 +181,7 @@ ${filesList}
 
   const getPRDetails = async (prUrl, prNumber) => {
     const { owner, repo } = parseGitHubUrl(prUrl);
+    const octokit = await githubAuth.getOctokit(null, prUrl);
     const prDetails = await octokit.pulls.get({
       owner,
       repo,
@@ -283,7 +289,7 @@ ${apiResponse.filesToCreate.map(f => `- \`${f.path}\` (${f.type})`).join('\n')}
         await createPRComment(pr.html_url, pr.number, commentBody);
         console.log("Comment created with analysis options, waiting for user choice...");
       } catch (error) {
-        console.error("Failed to create analysis comment:", error.message);
+        console.error("❌Failed to create analysis comment:", error.message);
       }
     }
 
@@ -356,7 +362,7 @@ ${apiResponse.filesToCreate.map(f => `- \`${f.path}\` (${f.type})`).join('\n')}
       await updateComment(prUrl, comment.id, completedComment);
       
     } catch (error) {
-      console.error("Error processing choice:", error.message);
+      console.error("❌Error processing choice:", error.message);
       
       // Handle error and restore comment
       try {
@@ -368,7 +374,7 @@ ${apiResponse.filesToCreate.map(f => `- \`${f.path}\` (${f.type})`).join('\n')}
         const errorComment = createErrorComment(fileChanges, error.message);
         await updateComment(prUrl, comment.id, errorComment);
       } catch (restoreError) {
-        console.error("Failed to restore comment after error:", restoreError.message);
+        console.error("❌Failed to restore comment after error:", restoreError.message);
       }
     }
 
@@ -417,12 +423,12 @@ ${apiResponse.filesToCreate.map(f => `- \`${f.path}\` (${f.type})`).join('\n')}
         raw_url: file.raw_url,
       }));
     } catch (error) {
-      console.error("Error fetching PR file changes:", error.message);
+      console.error("❌Error fetching PR file changes:", error.message);
       if (error.status === 404) {
-        console.error("404 Error - This might be due to:");
-        console.error("1. Repository is private and GitHub App doesn't have access");
-        console.error("2. GitHub App is not installed on this repository");
-        console.error("3. GitHub App permissions are insufficient");
+        console.error("❌404 Error - This might be due to:");
+        console.error("❌1. Repository is private and GitHub App doesn't have access");
+        console.error("❌2. GitHub App is not installed on this repository");
+        console.error("❌3. GitHub App permissions are insufficient");
       }
       return [];
     }
