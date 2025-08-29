@@ -38,18 +38,25 @@ class GitService {
   /**
    * Call external API to get file analysis and paths
    */
-  async callAnalysisAPI(changedFiles) {
+  async callAnalysisAPI(changedFiles, owner = null, repo = null) {
+    if (!owner || !repo) {
+      throw new Error("Owner and repo are required");
+    }
+
     try {
       console.log('Calling analysis API...');
       
+      const requestBody = {
+        changedFiles: changedFiles,
+        org_name: owner,
+        repo_name: repo
+      };
       const response = await fetch(`${this.apiBaseUrl}/api/analyze-files`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          changedFiles: changedFiles
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
@@ -259,7 +266,10 @@ This PR was automatically generated in response to PR #${prData.number}.
 
       // Step 1: Call analysis API first to get file paths and content
       console.log("Step 1: Calling analysis API...");
-      const apiResponse = await this.callAnalysisAPI(fileChanges);
+
+      // Extract owner and repo from repository full name
+      const { owner: repoOwner, repo: repoName } = this.parseGitHubUrl(prData.url);
+      const apiResponse = await this.callAnalysisAPI(fileChanges, repoOwner, repoName);
 
       // Step 2: Check if API returned any files to create
       if (!apiResponse.filesToCreate || apiResponse.filesToCreate.length === 0) {

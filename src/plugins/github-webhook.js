@@ -219,7 +219,10 @@ ${filesList}
   const processAddComments = async (prUrl, prNumber, fileChanges, commitSha) => {
     console.log("Adding analysis as comments (NO PR creation)...");
     
-    const apiResponse = await gitService.callAnalysisAPI(fileChanges);
+    // Extract owner and repo from PR URL
+    const { owner, repo } = parseGitHubUrl(prUrl);
+    
+    const apiResponse = await gitService.callAnalysisAPI(fileChanges, owner, repo);
     
     if (apiResponse?.filesToCreate && apiResponse.filesToCreate.length > 0) {
       for (const file of apiResponse.filesToCreate) {

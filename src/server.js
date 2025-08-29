@@ -21,11 +21,19 @@ server.get("/health", async (request, reply) => {
 
 // Dummy API endpoint for file analysis from CNE
 server.post("/api/analyze-files", async (request, reply) => {
-  const { changedFiles } = request.body;
+  const { changedFiles, org_name, repo_name } = request.body;
+
+  if (!org_name || !repo_name) {
+    return {
+      success: false,
+      message: "Owner and repo are required"
+    };
+  }
 
   console.log("Dummy API called with:", {
     filesCount: changedFiles?.length || 0,
-    files: changedFiles?.map(f => f.filename) || []
+    files: changedFiles?.map(f => f.filename) || [],
+    repository: org_name && repo_name ? `${org_name}/${repo_name}` : 'Not provided'
   });
 
   await new Promise((resolve) => setTimeout(resolve, 3000));
